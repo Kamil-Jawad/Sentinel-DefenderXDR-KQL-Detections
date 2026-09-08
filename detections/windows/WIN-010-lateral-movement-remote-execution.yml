@@ -1,0 +1,218 @@
+id: 6b5d2e91-4f73-48a0-c6d2-9e1b7f354820
+name: Windows VM - Lateral Movement or Remote Execution Detected
+description: |
+  Identifies potential lateral movement to an Azure Windows VM by correlating remote Windows authentication with suspicious remote-execution activity on the destination host. The rule focuses on WMI, WinRM, PsExec or service-based execution, WinRS, and remote service creation. Known privileged administration infrastructure should be tuned through trusted-source and account baselines. Successful remote authentication without execution evidence does not trigger this analytic.
+severity: High
+status: Available
+requiredDataConnectors:
+  - connectorId: SecurityEvents
+    dataTypes:
+      - SecurityEvent
+  - connectorId: WindowsSecurityEvents
+    dataTypes:
+      - SecurityEvent
+  - connectorId: WindowsForwardedEvents
+    dataTypes:
+      - WindowsEvent
+  - connectorId: MicrosoftThreatProtection
+    dataTypes:
+      - DeviceProcessEvents
+queryFrequency: 5m
+queryPeriod: 15m
+triggerOperator: gt
+triggerThreshold: 0
+tactics:
+  - LateralMovement
+relevantTechniques:
+  - T1021
+  - T1021.001
+  - T1021.002
+  - T1021.006
+  - T1047
+  - T1569.002
+query: |
+  let DetectionWindow = 15m;
+  let CorrelationWindow = 10m;
+
+  let TrustedSources =
+      _GetWatchlist('Windows_LateralMovement_TrustedSources')
+      | project SearchKey;
+
+  let RemoteLogons =
+      SecurityEvent
+      | where TimeGenerated >= ago(DetectionWindow)
+      | where EventID == 4624
+      | where LogonType in (3, 10)
+      | where isnotempty(IpAddress)
+      | where isnotempty(TargetUserName)
+      | where IpAddress !in ("-", "::1", "127.0.0.1")
+      | where IpAddress !in (TrustedSources)
+      | where TargetUserName !in~ (
+          "ANONYMOUS LOGON",
+          "SYSTEM",
+          "LOCAL SERVICE",
+          "NETWORK SERVICE"
+      )
+      | project
+          LogonTime = TimeGenerated,
+          Computer,
+          SourceIP = IpAddress,
+          TargetAccount = TargetUserName,
+          TargetDomain = TargetDomainName,
+          LogonType,
+          LogonId,
+          AuthenticationPackageName;
+
+  let RemoteExecution =
+      DeviceProcessEvents
+      | where Timestamp >= ago(DetectionWindow)
+      | where
+          FileName in~ (
+              "cmd.exe",
+              "powershell.exe",
+              "pwsh.exe",
+              "sc.exe",
+              "wmic.exe",
+              "winrs.exe",
+              "psexec.exe",
+              "psexesvc.exe"
+          )
+          or InitiatingProcessFileName in~ (
+              "wmiprvse.exe",
+              "wsmprovhost.exe",
+              "psexesvc.exe"
+          )
+      | extend
+          File = tolower(FileName),
+          Parent = tolower(InitiatingProcessFileName),
+          Cmd = tolower(ProcessCommandLine)
+      | extend
+          RemoteExecutionIndicator = case(
+              Parent == "wmiprvse.exe", "WMI Remote Execution",
+              Parent == "wsmprovhost.exe", "WinRM Remote Execution",
+              File == "psexesvc.exe" or Parent == "psexesvc.exe", "PsExec/Service-based Remote Execution",
+              File == "sc.exe" and (Cmd contains " create " or Cmd contains "\\\\"), "Remote Service Execution",
+              File == "winrs.exe", "WinRS Remote Execution",
+              File == "wmic.exe" and (Cmd contains "/node:" or Cmd contains "process call create"), "WMI Remote Process Creation",
+              "Other Remote Execution"
+          )
+      | where RemoteExecutionIndicator != "Other Remote Execution"
+          or (
+              File in~ ("cmd.exe", "powershell.exe", "pwsh.exe")
+              and Parent in~ ("wmiprvse.exe", "wsmprovhost.exe", "psexesvc.exe")
+          )
+      | project
+          ProcessTime = Timestamp,
+          DeviceName,
+          DeviceId,
+          ProcessAccount = AccountName,
+          FileName,
+          FolderPath,
+          ProcessCommandLine,
+          InitiatingProcessFileName,
+          InitiatingProcessCommandLine,
+          InitiatingProcessAccountName,
+          ProcessId,
+          InitiatingProcessId,
+          SHA1,
+          RemoteExecutionIndicator;
+
+  RemoteLogons
+  | join kind=inner RemoteExecution
+      on $left.Computer == $right.DeviceName
+  | where ProcessTime between (LogonTime .. LogonTime + CorrelationWindow)
+  | extend
+      AccountMatch = TargetAccount =~ ProcessAccount
+          or TargetAccount =~ InitiatingProcessAccountName
+  | where AccountMatch
+      or RemoteExecutionIndicator in (
+          "WMI Remote Execution",
+          "WinRM Remote Execution",
+          "PsExec/Service-based Remote Execution",
+          "Remote Service Execution",
+          "WMI Remote Process Creation"
+      )
+  | summarize
+      FirstRemoteLogon = min(LogonTime),
+      FirstExecution = min(ProcessTime),
+      ExecutionCount = count(),
+      ExecutionTypes = make_set(RemoteExecutionIndicator, 10),
+      Processes = make_set(FileName, 10),
+      Commands = make_set(ProcessCommandLine, 10),
+      SHA1s = make_set(SHA1, 10)
+      by
+          Computer,
+          DeviceId,
+          SourceIP,
+          TargetAccount,
+          TargetDomain,
+          LogonType
+  | extend
+      TimeFromLogonToExecution = datetime_diff("second", FirstExecution, FirstRemoteLogon),
+      DetectionReason = strcat("Remote logon followed by ", strcat_array(ExecutionTypes, ", "))
+  | project
+      TimeGenerated = FirstExecution,
+      Computer,
+      DeviceId,
+      SourceIP,
+      TargetAccount,
+      TargetDomain,
+      LogonType,
+      FirstRemoteLogon,
+      FirstExecution,
+      TimeFromLogonToExecution,
+      ExecutionCount,
+      ExecutionTypes,
+      Processes,
+      Commands,
+      SHA1s,
+      DetectionReason
+  | order by TimeGenerated desc
+entityMappings:
+  - entityType: Account
+    fieldMappings:
+      - identifier: FullName
+        columnName: TargetAccount
+  - entityType: Host
+    fieldMappings:
+      - identifier: FullName
+        columnName: Computer
+  - entityType: IP
+    fieldMappings:
+      - identifier: Address
+        columnName: SourceIP
+  - entityType: Process
+    fieldMappings:
+      - identifier: CommandLine
+        columnName: Commands
+customDetails:
+  SourceIP: SourceIP
+  TargetAccount: TargetAccount
+  TargetHost: Computer
+  LogonType: LogonType
+  ExecutionType: ExecutionTypes
+  ExecutionCount: ExecutionCount
+  TimeToExecution: TimeFromLogonToExecution
+  Processes: Processes
+  Commands: Commands
+  SHA1s: SHA1s
+eventGroupingSettings:
+  aggregationKind: SingleAlert
+incidentConfiguration:
+  createIncident: true
+  groupingConfiguration:
+    enabled: true
+    reopenClosedIncident: false
+    lookbackDuration: PT1H
+    matchingMethod: Selected
+    groupByEntities:
+      - Host
+      - Account
+      - IP
+    groupByAlertDetails: []
+    groupByCustomDetails: []
+alertDetailsOverride:
+  alertDisplayNameFormat: "Potential lateral movement to {{Computer}} from {{SourceIP}} - {{DetectionReason}}"
+  alertDescriptionFormat: "Remote authentication from {{SourceIP}} to {{Computer}} was followed by {{ExecutionTypes}} within {{TimeFromLogonToExecution}} seconds for account {{TargetAccount}}."
+version: 1.0.0
+kind: Scheduled
