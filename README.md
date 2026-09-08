@@ -1,0 +1,1 @@
+# Sentinel-DefenderXDR-KQL-Detections
