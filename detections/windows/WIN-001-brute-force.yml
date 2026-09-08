@@ -1,0 +1,55 @@
+id: 7e2c9d1b-6f03-4a8d-9e6f-1b7f4c0a2d11
+name: Windows VM - Brute Force Attack Detected
+description: Identifies repeated failed Windows authentication attempts against the same account from the same source IP on an Azure Windows VM. The rule uses a short correlation window and excludes known non-user identities and approved sources.
+severity: High
+status: Available
+requiredDataConnectors:
+  - connectorId: SecurityEvents
+    dataTypes: [SecurityEvent]
+  - connectorId: WindowsSecurityEvents
+    dataTypes: [SecurityEvent]
+queryFrequency: 5m
+queryPeriod: 10m
+triggerOperator: gt
+triggerThreshold: 0
+tactics: [CredentialAccess]
+relevantTechniques: [T1110, T1110.001]
+query: |
+  let DetectionWindow = 10m;
+  let BruteForceThreshold = 10;
+  let AllowedSources = _GetWatchlist('Windows_BruteForce_AllowedSources') | project SearchKey;
+  SecurityEvent
+  | where TimeGenerated >= ago(DetectionWindow)
+  | where EventID == 4625
+  | where isnotempty(IpAddress) and isnotempty(TargetUserName)
+  | where IpAddress !in ("-", "::1", "127.0.0.1") and IpAddress !in (AllowedSources)
+  | where TargetUserName !in~ ("ANONYMOUS LOGON", "SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE")
+  | where LogonType in (2, 3, 10)
+  | summarize FailedAttempts=count(), FirstAttempt=min(TimeGenerated), LastAttempt=max(TimeGenerated), FailureReasons=make_set(FailureReason,5), StatusCodes=make_set(Status,5), SubStatusCodes=make_set(SubStatus,5), LogonTypes=make_set(LogonType,5) by IpAddress, TargetUserName, Computer
+  | where FailedAttempts >= BruteForceThreshold
+  | extend AttackType="Brute Force", DetectionWindowMinutes=datetime_diff("minute", LastAttempt, FirstAttempt)
+  | project TimeGenerated=LastAttempt, Computer, TargetUserName, IpAddress, AttackType, FailedAttempts, FirstAttempt, LastAttempt, DetectionWindowMinutes, LogonTypes, FailureReasons, StatusCodes, SubStatusCodes
+  | order by FailedAttempts desc
+entityMappings:
+  - entityType: Account
+    fieldMappings: [{identifier: FullName, columnName: TargetUserName}]
+  - entityType: Host
+    fieldMappings: [{identifier: FullName, columnName: Computer}]
+  - entityType: IP
+    fieldMappings: [{identifier: Address, columnName: IpAddress}]
+customDetails:
+  AttackType: AttackType
+  FailedAttempts: FailedAttempts
+  SourceIP: IpAddress
+  TargetAccount: TargetUserName
+  TargetHost: Computer
+incidentConfiguration:
+  createIncident: true
+  groupingConfiguration:
+    enabled: true
+    reopenClosedIncident: false
+    lookbackDuration: PT1H
+    matchingMethod: Selected
+    groupByEntities: [Account, Host, IP]
+version: 1.0.0
+kind: Scheduled
