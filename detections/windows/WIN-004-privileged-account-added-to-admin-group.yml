@@ -1,0 +1,127 @@
+id: d91b6a42-0f8e-47d3-a1c5-6e2fb8349054
+name: Windows VM - Privileged Account Added to Admin Group
+description: |
+  Identifies an account being added to a privileged Windows security group on an Azure Windows VM. The rule focuses on high-impact groups such as local Administrators and Domain Admins and excludes routine non-privileged group membership changes. Unexpected additions may indicate privilege escalation or persistence. Investigate the initiating account, added member, target group, and subsequent activity.
+severity: High
+status: Available
+requiredDataConnectors:
+  - connectorId: SecurityEvents
+    dataTypes:
+      - SecurityEvent
+  - connectorId: WindowsSecurityEvents
+    dataTypes:
+      - SecurityEvent
+  - connectorId: WindowsForwardedEvents
+    dataTypes:
+      - WindowsEvent
+queryFrequency: 5m
+queryPeriod: 10m
+triggerOperator: gt
+triggerThreshold: 0
+tactics:
+  - PrivilegeEscalation
+  - Persistence
+relevantTechniques:
+  - T1098
+  - T1098.007
+query: |
+  let Lookback = 10m;
+
+  let CriticalGroups = dynamic([
+      "Administrators",
+      "Domain Admins",
+      "Enterprise Admins",
+      "Schema Admins",
+      "Account Operators",
+      "Server Operators"
+  ]);
+
+  let HighRiskGroups = dynamic([
+      "Backup Operators",
+      "Remote Management Users",
+      "Remote Desktop Users",
+      "Print Operators",
+      "Hyper-V Administrators"
+  ]);
+
+  SecurityEvent
+  | where TimeGenerated >= ago(Lookback)
+  | where EventID in (4732, 4728, 4756)
+  | where isnotempty(TargetUserName)
+  | where isnotempty(MemberName)
+  | where TargetUserName has_any (CriticalGroups)
+      or TargetUserName has_any (HighRiskGroups)
+  | where MemberName !endswith "$"
+  | where MemberName !contains "S-1-5-"
+  | extend
+      GroupSeverity = case(
+          TargetUserName has_any (CriticalGroups), "Critical",
+          TargetUserName has_any (HighRiskGroups), "High",
+          "Medium"
+      ),
+      GroupType = case(
+          EventID == 4732, "Local Group",
+          EventID == 4728, "Global Group",
+          EventID == 4756, "Universal Group",
+          "Unknown"
+      )
+  | project
+      TimeGenerated,
+      Computer,
+      EventID,
+      GroupSeverity,
+      GroupType,
+      TargetGroup = TargetUserName,
+      AddedMember = MemberName,
+      InitiatingAccount = SubjectUserName,
+      SubjectDomainName,
+      MemberSid,
+      IpAddress,
+      Activity
+  | order by TimeGenerated desc
+entityMappings:
+  - entityType: Account
+    fieldMappings:
+      - identifier: FullName
+        columnName: AddedMember
+  - entityType: Host
+    fieldMappings:
+      - identifier: FullName
+        columnName: Computer
+  - entityType: SecurityGroup
+    fieldMappings:
+      - identifier: FullName
+        columnName: TargetGroup
+  - entityType: IP
+    fieldMappings:
+      - identifier: Address
+        columnName: IpAddress
+customDetails:
+  AddedMember: AddedMember
+  TargetGroup: TargetGroup
+  InitiatingAccount: InitiatingAccount
+  GroupType: GroupType
+  GroupSeverity: GroupSeverity
+  SourceIP: IpAddress
+  EventID: EventID
+eventGroupingSettings:
+  aggregationKind: AlertPerResult
+incidentConfiguration:
+  createIncident: true
+  groupingConfiguration:
+    enabled: true
+    reopenClosedIncident: false
+    lookbackDuration: PT1H
+    matchingMethod: Selected
+    groupByEntities:
+      - Host
+      - SecurityGroup
+      - Account
+    groupByAlertDetails: []
+    groupByCustomDetails: []
+alertDetailsOverride:
+  alertDisplayNameFormat: "{{AddedMember}} added to {{TargetGroup}} on {{Computer}}"
+  alertDescriptionFormat: "{{AddedMember}} was added to privileged group {{TargetGroup}} on {{Computer}} by {{InitiatingAccount}}."
+  alertSeverityColumnName: GroupSeverity
+version: 1.0.0
+kind: Scheduled
