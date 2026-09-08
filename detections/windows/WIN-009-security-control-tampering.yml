@@ -1,0 +1,222 @@
+id: 58d1f4a6-2c73-4e90-b815-6a7c39e2f054
+name: Windows VM - Security Control Disabled or Tampered
+description: |
+  Identifies unexpected attempts to disable, modify, or impair security controls on Azure Windows VMs. The rule focuses on Microsoft Defender tampering, Defender Antivirus protection changes, Windows audit-log clearing, audit-policy changes, and firewall service stoppage. Legitimate security-management and maintenance changes should be baselined and allowlisted. Unexpected activity should be correlated with the initiating account, process, and nearby authentication or execution events.
+severity: Critical
+status: Available
+requiredDataConnectors:
+  - connectorId: MicrosoftThreatProtection
+    dataTypes:
+      - DeviceEvents
+  - connectorId: WindowsSecurityEvents
+    dataTypes:
+      - SecurityEvent
+  - connectorId: WindowsForwardedEvents
+    dataTypes:
+      - WindowsEvent
+queryFrequency: 5m
+queryPeriod: 10m
+triggerOperator: gt
+triggerThreshold: 0
+tactics:
+  - DefenseEvasion
+relevantTechniques:
+  - T1562.001
+  - T1070.001
+query: |
+  let Lookback = 10m;
+
+  let DefenderTampering =
+      DeviceEvents
+      | where Timestamp >= ago(Lookback)
+      | where ActionType == "TamperingAttempt"
+      | extend
+          DetectionSource = "Microsoft Defender XDR",
+          DetectionType = "Defender Tampering Attempt",
+          DetectionReason = "Microsoft Defender reported a tampering attempt"
+      | project
+          TimeGenerated = Timestamp,
+          DeviceName,
+          DeviceId,
+          AccountName,
+          InitiatingProcessFileName,
+          InitiatingProcessCommandLine,
+          ActionType,
+          DetectionSource,
+          DetectionType,
+          DetectionReason,
+          AdditionalFields;
+
+  let DefenderWindowsEvents =
+      WindowsEvent
+      | where TimeGenerated >= ago(Lookback)
+      | where Provider =~ "Microsoft-Windows-Windows Defender"
+      | where EventID in (5001, 5007)
+      | extend
+          EventText = tostring(EventData),
+          RawText = tostring(RawEventData)
+      | extend CombinedText = strcat(EventText, " ", RawText, " ", EventLevelName)
+      | where EventID == 5001
+          or (
+              EventID == 5007
+              and (
+                  CombinedText contains "DisableRealtimeMonitoring"
+                  or CombinedText contains "DisableBehaviorMonitoring"
+                  or CombinedText contains "DisableIOAVProtection"
+                  or CombinedText contains "DisableScriptScanning"
+                  or CombinedText contains "DisableBlockAtFirstSeen"
+                  or CombinedText contains "DisableArchiveScanning"
+                  or CombinedText contains "DisableIntrusionPreventionSystem"
+                  or CombinedText contains "DisableScanningNetworkFiles"
+                  or CombinedText contains "ExclusionPath"
+                  or CombinedText contains "ExclusionProcess"
+                  or CombinedText contains "ExclusionExtension"
+                  or CombinedText contains "RealTimeProtection"
+              )
+          )
+      | extend
+          DetectionSource = "Windows Defender Operational",
+          DetectionType = case(
+              EventID == 5001, "Defender Real-Time Protection Disabled",
+              EventID == 5007, "High-Risk Defender Configuration Change",
+              "Defender Security Control Change"
+          ),
+          DetectionReason = case(
+              EventID == 5001, "Microsoft Defender real-time protection was disabled",
+              EventID == 5007, "Microsoft Defender security configuration was modified",
+              "Microsoft Defender security control changed"
+          )
+      | project
+          TimeGenerated,
+          DeviceName = Computer,
+          DeviceId = tostring(EventOriginId),
+          AccountName = tostring(SystemUserId),
+          InitiatingProcessFileName = "",
+          InitiatingProcessCommandLine = "",
+          ActionType = tostring(EventID),
+          DetectionSource,
+          DetectionType,
+          DetectionReason,
+          AdditionalFields = CombinedText;
+
+  let AuditEvents =
+      WindowsEvent
+      | where TimeGenerated >= ago(Lookback)
+      | where Provider == "Microsoft-Windows-Security-Auditing"
+      | where EventID in (1102, 4719)
+      | extend
+          DetectionSource = "Windows Security",
+          DetectionType = case(
+              EventID == 1102, "Windows Security Audit Log Cleared",
+              EventID == 4719, "Windows Audit Policy Changed",
+              "Windows Security Control Change"
+          ),
+          DetectionReason = case(
+              EventID == 1102, "Windows Security audit log was cleared",
+              EventID == 4719, "Windows system audit policy was changed",
+              "Windows security auditing configuration changed"
+          )
+      | project
+          TimeGenerated,
+          DeviceName = Computer,
+          DeviceId = tostring(EventOriginId),
+          AccountName = tostring(SystemUserId),
+          InitiatingProcessFileName = "",
+          InitiatingProcessCommandLine = "",
+          ActionType = tostring(EventID),
+          DetectionSource,
+          DetectionType,
+          DetectionReason,
+          AdditionalFields = tostring(EventData);
+
+  let FirewallEvents =
+      WindowsEvent
+      | where TimeGenerated >= ago(Lookback)
+      | where Provider == "Microsoft-Windows-Security-Auditing"
+      | where EventID == 5025
+      | extend EventText = strcat(tostring(EventData), " ", tostring(RawEventData), " ", EventLevelName)
+      | where not(EventText contains "shutdown" or EventText contains "system shutdown")
+      | extend
+          DetectionSource = "Windows Firewall",
+          DetectionType = "Windows Firewall Service Stopped",
+          DetectionReason = "Windows Firewall service MpsSvc stopped"
+      | project
+          TimeGenerated,
+          DeviceName = Computer,
+          DeviceId = tostring(EventOriginId),
+          AccountName = tostring(SystemUserId),
+          InitiatingProcessFileName = "",
+          InitiatingProcessCommandLine = "",
+          ActionType = tostring(EventID),
+          DetectionSource,
+          DetectionType,
+          DetectionReason,
+          AdditionalFields = EventText;
+
+  union DefenderTampering, DefenderWindowsEvents, AuditEvents, FirewallEvents
+  | extend AlertSeverity = case(
+      DetectionType == "Defender Tampering Attempt", "Critical",
+      DetectionType == "Defender Real-Time Protection Disabled", "Critical",
+      DetectionType == "Windows Security Audit Log Cleared", "Critical",
+      DetectionType == "Windows Audit Policy Changed", "High",
+      DetectionType == "High-Risk Defender Configuration Change", "High",
+      DetectionType == "Windows Firewall Service Stopped", "High",
+      "High"
+  )
+  | project
+      TimeGenerated,
+      DeviceName,
+      DeviceId,
+      AccountName,
+      DetectionSource,
+      DetectionType,
+      DetectionReason,
+      AlertSeverity,
+      ActionType,
+      InitiatingProcessFileName,
+      InitiatingProcessCommandLine,
+      AdditionalFields
+  | order by TimeGenerated desc
+entityMappings:
+  - entityType: Host
+    fieldMappings:
+      - identifier: FullName
+        columnName: DeviceName
+  - entityType: Account
+    fieldMappings:
+      - identifier: FullName
+        columnName: AccountName
+  - entityType: Process
+    fieldMappings:
+      - identifier: FullName
+        columnName: InitiatingProcessFileName
+customDetails:
+  DetectionType: DetectionType
+  DetectionReason: DetectionReason
+  DetectionSource: DetectionSource
+  Account: AccountName
+  Process: InitiatingProcessFileName
+  CommandLine: InitiatingProcessCommandLine
+  DeviceId: DeviceId
+  EventDetails: AdditionalFields
+eventGroupingSettings:
+  aggregationKind: AlertPerResult
+incidentConfiguration:
+  createIncident: true
+  groupingConfiguration:
+    enabled: true
+    reopenClosedIncident: false
+    lookbackDuration: PT1H
+    matchingMethod: Selected
+    groupByEntities:
+      - Host
+      - Account
+    groupByAlertDetails:
+      - DetectionType
+    groupByCustomDetails: []
+alertDetailsOverride:
+  alertDisplayNameFormat: "Security control tampering on {{DeviceName}} - {{DetectionType}}"
+  alertDescriptionFormat: "{{DetectionReason}} was detected on {{DeviceName}} for account {{AccountName}}."
+  alertSeverityColumnName: AlertSeverity
+version: 1.0.0
+kind: Scheduled
