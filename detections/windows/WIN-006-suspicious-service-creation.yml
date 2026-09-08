@@ -1,0 +1,134 @@
+id: f6b2c8d1-74a9-46e0-b315-9d7f2a5c6847
+name: Windows VM - Suspicious Service Creation
+description: |
+  Identifies Windows service creation on Azure VMs when the configured service executable or command line has suspicious persistence characteristics. The rule prioritizes user-writable, temporary, download, script-interpreter, and LOLBin paths or commands. Known Microsoft, Azure, security, monitoring, and enterprise-management services should be baselined and allowlisted. Investigate the initiating account, service binary, process execution, file reputation, and network activity.
+severity: High
+status: Available
+requiredDataConnectors:
+  - connectorId: SecurityEvents
+    dataTypes:
+      - SecurityEvent
+  - connectorId: WindowsSecurityEvents
+    dataTypes:
+      - SecurityEvent
+  - connectorId: WindowsForwardedEvents
+    dataTypes:
+      - WindowsEvent
+  - connectorId: MicrosoftThreatProtection
+    dataTypes:
+      - DeviceProcessEvents
+queryFrequency: 5m
+queryPeriod: 10m
+triggerOperator: gt
+triggerThreshold: 0
+tactics:
+  - Persistence
+  - PrivilegeEscalation
+relevantTechniques:
+  - T1543.003
+query: |
+  let Lookback = 10m;
+
+  SecurityEvent
+  | where TimeGenerated >= ago(Lookback)
+  | where EventID == 7045
+  | extend
+      ServiceName = tostring(column_ifexists("ServiceName", "")),
+      ImagePath = tostring(column_ifexists("ImagePath", "")),
+      ServiceAccount = tostring(column_ifexists("Account", "")),
+      Initiator = tostring(column_ifexists("SubjectUserName", ""))
+  | where isnotempty(ImagePath)
+  | extend Cmd = tolower(trim(@" ", ImagePath))
+  | extend
+      SuspiciousPath =
+          Cmd contains @"\users\"
+          or Cmd contains @"\appdata\"
+          or Cmd contains @"\temp\"
+          or Cmd contains @"\windows\temp\"
+          or Cmd contains @"\downloads\"
+          or Cmd contains @"\public\",
+      SuspiciousInterpreter =
+          Cmd contains "powershell.exe"
+          or Cmd contains "pwsh.exe"
+          or Cmd contains "cmd.exe"
+          or Cmd contains "wscript.exe"
+          or Cmd contains "cscript.exe"
+          or Cmd contains "mshta.exe",
+      SuspiciousLOLBin =
+          Cmd contains "rundll32.exe"
+          or Cmd contains "regsvr32.exe"
+          or Cmd contains "msiexec.exe"
+          or Cmd contains "certutil.exe"
+          or Cmd contains "bitsadmin.exe",
+      SuspiciousArguments =
+          Cmd contains " -enc "
+          or Cmd contains " -encodedcommand "
+          or Cmd contains " -executionpolicy bypass"
+          or Cmd contains " http://"
+          or Cmd contains " https://"
+  | extend
+      SuspicionScore =
+          (iif(SuspiciousPath, 3, 0))
+          + (iif(SuspiciousInterpreter, 3, 0))
+          + (iif(SuspiciousLOLBin, 3, 0))
+          + (iif(SuspiciousArguments, 3, 0))
+  | where SuspicionScore >= 3
+  | extend
+      DetectionReason = case(
+          SuspiciousPath and SuspiciousInterpreter, "Service executes interpreter from suspicious path",
+          SuspiciousPath and SuspiciousArguments, "Service executes from suspicious path with suspicious arguments",
+          SuspiciousInterpreter and SuspiciousArguments, "Service uses suspicious interpreter/command",
+          SuspiciousLOLBin and SuspiciousPath, "Service uses LOLBin from suspicious path",
+          SuspiciousPath, "Service executable from suspicious path",
+          SuspiciousInterpreter, "Service uses script interpreter",
+          SuspiciousLOLBin, "Service uses LOLBin",
+          "Suspicious Service Creation"
+      )
+  | project
+      TimeGenerated,
+      Computer,
+      ServiceName,
+      ImagePath,
+      ServiceAccount,
+      Initiator,
+      DetectionReason,
+      SuspicionScore,
+      EventID,
+      Activity
+  | order by SuspicionScore desc, TimeGenerated desc
+entityMappings:
+  - entityType: Host
+    fieldMappings:
+      - identifier: FullName
+        columnName: Computer
+  - entityType: Account
+    fieldMappings:
+      - identifier: FullName
+        columnName: ServiceAccount
+customDetails:
+  ServiceName: ServiceName
+  ImagePath: ImagePath
+  ServiceAccount: ServiceAccount
+  InitiatingAccount: Initiator
+  SuspicionScore: SuspicionScore
+  DetectionReason: DetectionReason
+  EventID: EventID
+eventGroupingSettings:
+  aggregationKind: SingleAlert
+incidentConfiguration:
+  createIncident: true
+  groupingConfiguration:
+    enabled: true
+    reopenClosedIncident: false
+    lookbackDuration: PT1H
+    matchingMethod: Selected
+    groupByEntities:
+      - Host
+      - Account
+    groupByAlertDetails: []
+    groupByCustomDetails: []
+alertDetailsOverride:
+  alertDisplayNameFormat: "Suspicious Windows service on {{Computer}} - {{DetectionReason}}"
+  alertDescriptionFormat: "Service {{ServiceName}} was created on {{Computer}} with suspicious characteristics: {{DetectionReason}}."
+version: 1.0.0
+kind: Scheduled
