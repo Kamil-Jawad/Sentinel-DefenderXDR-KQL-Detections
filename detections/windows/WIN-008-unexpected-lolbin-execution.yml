@@ -1,0 +1,158 @@
+id: 4c9e1a72-8b36-45f0-a2d7-91e5c6b84310
+name: Windows VM - Unexpected LOLBin Execution
+description: |
+  Identifies execution of Windows living-off-the-land binaries when command-line, parent-process, payload-location, or remote-content characteristics indicate potential proxy execution. The rule focuses on mshta, rundll32, regsvr32, msiexec, certutil, bitsadmin, WMIC, CMSTP, and InstallUtil. Legitimate software deployment and administration should be baselined through targeted allowlists.
+severity: High
+status: Available
+requiredDataConnectors:
+  - connectorId: MicrosoftThreatProtection
+    dataTypes:
+      - DeviceProcessEvents
+queryFrequency: 5m
+queryPeriod: 10m
+triggerOperator: gt
+triggerThreshold: 0
+tactics:
+  - DefenseEvasion
+relevantTechniques:
+  - T1218
+  - T1218.005
+  - T1218.007
+  - T1218.010
+  - T1218.011
+query: |
+  let Lookback = 10m;
+
+  DeviceProcessEvents
+  | where Timestamp >= ago(Lookback)
+  | where FileName in~ (
+      "mshta.exe", "rundll32.exe", "regsvr32.exe", "msiexec.exe",
+      "certutil.exe", "bitsadmin.exe", "wmic.exe", "cmstp.exe", "installutil.exe"
+  )
+  | where isnotempty(ProcessCommandLine)
+  | extend
+      File = tolower(FileName),
+      Cmd = tolower(ProcessCommandLine),
+      Parent = tolower(InitiatingProcessFileName),
+      Path = tolower(FolderPath)
+  | extend
+      IsSystemPath =
+          Path startswith @"c:\windows\system32\"
+          or Path startswith @"c:\windows\syswow64\",
+      SuspiciousPath =
+          Cmd contains @"\users\"
+          or Cmd contains @"\appdata\"
+          or Cmd contains @"\temp\"
+          or Cmd contains @"\windows\temp\"
+          or Cmd contains @"\downloads\"
+          or Cmd contains @"\public\",
+      RemoteContent =
+          Cmd contains "http://"
+          or Cmd contains "https://"
+          or Cmd contains "\\",
+      ScriptContent =
+          Cmd contains ".hta"
+          or Cmd contains ".sct"
+          or Cmd contains ".js"
+          or Cmd contains ".jse"
+          or Cmd contains ".vbs"
+          or Cmd contains ".vbe"
+          or Cmd contains ".wsf"
+          or Cmd contains ".dll"
+          or Cmd contains ".cpl"
+          or Cmd contains "javascript:"
+          or Cmd contains "vbscript:",
+      SuspiciousArguments =
+          Cmd contains "javascript:"
+          or Cmd contains "vbscript:"
+          or Cmd contains "scrobj.dll"
+          or Cmd contains "control_rundll"
+          or Cmd contains "runhtmlapplication"
+          or Cmd contains "-urlcache"
+          or Cmd contains "-decode"
+          or Cmd contains "/url",
+      SuspiciousParent = Parent in~ (
+          "winword.exe", "excel.exe", "outlook.exe", "powerpnt.exe", "onenote.exe",
+          "wscript.exe", "cscript.exe", "powershell.exe", "pwsh.exe", "cmd.exe", "wmiprvse.exe"
+      )
+  | extend
+      SuspicionScore =
+          (iif(RemoteContent, 4, 0))
+          + (iif(SuspiciousPath, 3, 0))
+          + (iif(ScriptContent, 2, 0))
+          + (iif(SuspiciousArguments, 3, 0))
+          + (iif(SuspiciousParent, 3, 0))
+          + (iif(not(IsSystemPath), 2, 0))
+  | where SuspicionScore >= 5
+  | extend
+      DetectionReason = case(
+          RemoteContent and SuspiciousParent, "LOLBin launched by suspicious parent to access remote content",
+          File == "mshta.exe" and (Cmd contains "javascript:" or Cmd contains "vbscript:" or RemoteContent), "Mshta proxy execution",
+          File == "rundll32.exe" and (Cmd contains ".dll" or Cmd contains ".cpl" or Cmd contains "javascript:" or RemoteContent), "Rundll32 proxy execution",
+          File == "regsvr32.exe" and (Cmd contains ".sct" or RemoteContent), "Regsvr32 proxy execution",
+          File == "msiexec.exe" and (RemoteContent or Cmd contains ".msi"), "Msiexec proxy execution",
+          File == "certutil.exe" and (Cmd contains "-urlcache" or Cmd contains "-decode" or RemoteContent), "Certutil download/decode activity",
+          File == "bitsadmin.exe" and RemoteContent, "BITSAdmin remote transfer",
+          SuspiciousPath, "LOLBin uses suspicious path",
+          SuspiciousParent, "LOLBin launched by unusual parent",
+          "Suspicious LOLBin execution"
+      )
+  | project
+      TimeGenerated = Timestamp,
+      DeviceName,
+      AccountName,
+      FileName,
+      FolderPath,
+      ProcessCommandLine,
+      InitiatingProcessFileName,
+      InitiatingProcessCommandLine,
+      InitiatingProcessAccountName,
+      DetectionReason,
+      SuspicionScore,
+      SHA1,
+      DeviceId,
+      ReportId
+  | order by SuspicionScore desc, TimeGenerated desc
+entityMappings:
+  - entityType: Host
+    fieldMappings:
+      - identifier: FullName
+        columnName: DeviceName
+  - entityType: Account
+    fieldMappings:
+      - identifier: FullName
+        columnName: AccountName
+  - entityType: Process
+    fieldMappings:
+      - identifier: CommandLine
+        columnName: ProcessCommandLine
+customDetails:
+  DetectionReason: DetectionReason
+  LOLBin: FileName
+  CommandLine: ProcessCommandLine
+  ParentProcess: InitiatingProcessFileName
+  ParentCommand: InitiatingProcessCommandLine
+  Account: AccountName
+  Device: DeviceName
+  Score: SuspicionScore
+  SHA1: SHA1
+eventGroupingSettings:
+  aggregationKind: SingleAlert
+incidentConfiguration:
+  createIncident: true
+  groupingConfiguration:
+    enabled: true
+    reopenClosedIncident: false
+    lookbackDuration: PT1H
+    matchingMethod: Selected
+    groupByEntities:
+      - Host
+      - Account
+      - Process
+    groupByAlertDetails: []
+    groupByCustomDetails: []
+alertDetailsOverride:
+  alertDisplayNameFormat: "Unexpected LOLBin execution on {{DeviceName}} - {{DetectionReason}}"
+  alertDescriptionFormat: "{{FileName}} executed on {{DeviceName}} under {{AccountName}} and matched {{DetectionReason}}."
+version: 1.0.0
+kind: Scheduled
