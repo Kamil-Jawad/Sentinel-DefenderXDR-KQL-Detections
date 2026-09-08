@@ -1,0 +1,143 @@
+id: e3a718c4-9d52-45f1-8b0a-2f6d9c7e5316
+name: Windows VM - Suspicious PowerShell Execution
+description: |
+  Identifies suspicious PowerShell execution on Azure Windows VMs using command-line and parent-process context. The rule focuses on encoded commands, download activity, execution-policy bypass, hidden execution, AMSI-related modification, and suspicious parent processes. Legitimate automation and administration should be baselined and allowlisted. Investigate the command line, initiating process, network activity, and files created by the process.
+severity: High
+status: Available
+requiredDataConnectors:
+  - connectorId: MicrosoftThreatProtection
+    dataTypes:
+      - DeviceProcessEvents
+queryFrequency: 5m
+queryPeriod: 10m
+triggerOperator: gt
+triggerThreshold: 0
+tactics:
+  - Execution
+  - DefenseEvasion
+relevantTechniques:
+  - T1059.001
+  - T1027
+  - T1105
+query: |
+  let Lookback = 10m;
+
+  DeviceProcessEvents
+  | where Timestamp >= ago(Lookback)
+  | where FileName in~ ("powershell.exe", "pwsh.exe", "powershell_ise.exe")
+  | where isnotempty(ProcessCommandLine)
+  | extend
+      Cmd = tolower(ProcessCommandLine),
+      ParentProcess = tolower(InitiatingProcessFileName)
+  | where
+      Cmd has_any (
+          "-encodedcommand",
+          "-enc",
+          "frombase64string",
+          "invoke-expression",
+          "downloadstring",
+          "downloadfile",
+          "downloaddata",
+          "invoke-webrequest",
+          "invoke-restmethod",
+          "net.webclient",
+          "start-bitstransfer",
+          "-executionpolicy bypass",
+          "-windowstyle hidden",
+          "reflection.assembly",
+          "add-type",
+          "http://",
+          "https://",
+          "amsiutils"
+      )
+      or (
+          ParentProcess in~ (
+              "winword.exe",
+              "excel.exe",
+              "outlook.exe",
+              "mshta.exe",
+              "wscript.exe",
+              "cscript.exe",
+              "wmiprvse.exe",
+              "rundll32.exe",
+              "regsvr32.exe",
+              "msiexec.exe",
+              "bitsadmin.exe"
+          )
+          and Cmd has_any (
+              "http://",
+              "https://",
+              "-enc",
+              "-encodedcommand",
+              "invoke-expression",
+              "downloadstring",
+              "downloadfile",
+              "invoke-webrequest",
+              "invoke-restmethod"
+          )
+      )
+  | where not(Cmd has_any ("azureautomation", "healthservice", "monitoringagent", "scom"))
+  | extend
+      DetectionReason = case(
+          Cmd has_any ("-encodedcommand", "-enc", "frombase64string"), "Encoded/Obfuscated PowerShell",
+          Cmd has_any ("downloadstring", "downloadfile", "downloaddata", "invoke-webrequest", "invoke-restmethod", "net.webclient", "start-bitstransfer"), "PowerShell Download Activity",
+          Cmd has_any ("-executionpolicy bypass", "-windowstyle hidden", "amsiutils"), "PowerShell Execution Evasion",
+          ParentProcess in~ ("winword.exe", "excel.exe", "outlook.exe", "mshta.exe", "wscript.exe", "cscript.exe", "wmiprvse.exe", "rundll32.exe", "regsvr32.exe", "msiexec.exe", "bitsadmin.exe"), "Suspicious PowerShell Parent Process",
+          "Suspicious PowerShell Activity"
+      )
+  | project
+      TimeGenerated = Timestamp,
+      DeviceName,
+      AccountName,
+      FileName,
+      FolderPath,
+      ProcessCommandLine,
+      InitiatingProcessFileName,
+      InitiatingProcessCommandLine,
+      InitiatingProcessAccountName,
+      DetectionReason,
+      SHA1,
+      DeviceId,
+      ReportId
+  | order by TimeGenerated desc
+entityMappings:
+  - entityType: Host
+    fieldMappings:
+      - identifier: FullName
+        columnName: DeviceName
+  - entityType: Account
+    fieldMappings:
+      - identifier: FullName
+        columnName: AccountName
+  - entityType: Process
+    fieldMappings:
+      - identifier: CommandLine
+        columnName: ProcessCommandLine
+customDetails:
+  DetectionReason: DetectionReason
+  PowerShellCommand: ProcessCommandLine
+  ParentProcess: InitiatingProcessFileName
+  ParentCommandLine: InitiatingProcessCommandLine
+  ExecutingAccount: AccountName
+  Device: DeviceName
+  SHA1: SHA1
+eventGroupingSettings:
+  aggregationKind: SingleAlert
+incidentConfiguration:
+  createIncident: true
+  groupingConfiguration:
+    enabled: true
+    reopenClosedIncident: false
+    lookbackDuration: PT1H
+    matchingMethod: Selected
+    groupByEntities:
+      - Host
+      - Account
+      - Process
+    groupByAlertDetails: []
+    groupByCustomDetails: []
+alertDetailsOverride:
+  alertDisplayNameFormat: "Suspicious PowerShell on {{DeviceName}} - {{DetectionReason}}"
+  alertDescriptionFormat: "PowerShell executed on {{DeviceName}} by {{AccountName}} and matched {{DetectionReason}}."
+version: 1.0.0
+kind: Scheduled
