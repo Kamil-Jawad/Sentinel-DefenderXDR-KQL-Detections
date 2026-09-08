@@ -1,0 +1,135 @@
+id: 2a7c9e4f-61b5-4d83-9f20-6e8b3c1a7542
+name: Windows VM - Suspicious Scheduled Task Creation
+description: |
+  Identifies creation or modification of Windows scheduled tasks on Azure VMs when the configured action contains suspicious execution or persistence characteristics. The rule focuses on PowerShell, command shells, script interpreters, LOLBins, user-writable or temporary paths, encoded commands, hidden execution, and remote content. Known Microsoft, Azure, monitoring, patching, and enterprise-management tasks should be baselined and allowlisted.
+severity: High
+status: Available
+requiredDataConnectors:
+  - connectorId: SecurityEvents
+    dataTypes:
+      - SecurityEvent
+  - connectorId: WindowsSecurityEvents
+    dataTypes:
+      - SecurityEvent
+  - connectorId: WindowsForwardedEvents
+    dataTypes:
+      - WindowsEvent
+queryFrequency: 5m
+queryPeriod: 10m
+triggerOperator: gt
+triggerThreshold: 0
+tactics:
+  - Persistence
+relevantTechniques:
+  - T1053.005
+query: |
+  let Lookback = 10m;
+  let SuspiciousExecutables = dynamic([
+      "powershell.exe", "pwsh.exe", "cmd.exe", "wscript.exe", "cscript.exe",
+      "mshta.exe", "rundll32.exe", "regsvr32.exe", "certutil.exe", "bitsadmin.exe"
+  ]);
+
+  SecurityEvent
+  | where TimeGenerated >= ago(Lookback)
+  | where EventID in (4698, 4702)
+  | extend
+      TaskName = tostring(column_ifexists("TaskName", "")),
+      TaskContent = tostring(column_ifexists("TaskContent", "")),
+      InitiatingAccount = tostring(column_ifexists("SubjectUserName", "")),
+      InitiatingDomain = tostring(column_ifexists("SubjectDomainName", ""))
+  | where isnotempty(TaskContent)
+  | extend
+      TaskXML = tolower(TaskContent),
+      Task = tolower(TaskName)
+  | extend
+      SuspiciousInterpreter = TaskXML has_any (SuspiciousExecutables),
+      SuspiciousPath =
+          TaskXML contains @"\users\"
+          or TaskXML contains @"\appdata\"
+          or TaskXML contains @"\temp\"
+          or TaskXML contains @"\windows\temp\"
+          or TaskXML contains @"\downloads\"
+          or TaskXML contains @"\public\",
+      SuspiciousArguments =
+          TaskXML contains "-encodedcommand"
+          or TaskXML contains " -enc "
+          or TaskXML contains "executionpolicy bypass"
+          or TaskXML contains "windowstyle hidden"
+          or TaskXML contains "frombase64string"
+          or TaskXML contains "downloadstring"
+          or TaskXML contains "invoke-webrequest"
+          or TaskXML contains "invoke-restmethod"
+          or TaskXML contains "http://"
+          or TaskXML contains "https://",
+      HiddenExecution = TaskXML contains "<hidden>true</hidden>"
+  | extend
+      SuspicionScore =
+          (iif(SuspiciousInterpreter, 3, 0))
+          + (iif(SuspiciousPath, 3, 0))
+          + (iif(SuspiciousArguments, 3, 0))
+          + (iif(HiddenExecution, 2, 0))
+  | where SuspicionScore >= 3
+  | extend
+      DetectionReason = case(
+          SuspiciousArguments and SuspiciousPath, "Scheduled Task with suspicious command and path",
+          SuspiciousArguments and SuspiciousInterpreter, "Scheduled Task uses suspicious interpreter with suspicious arguments",
+          SuspiciousPath and SuspiciousInterpreter, "Scheduled Task executes interpreter from suspicious path",
+          SuspiciousPath, "Scheduled Task action uses suspicious path",
+          SuspiciousInterpreter, "Scheduled Task uses script interpreter or LOLBin",
+          HiddenExecution, "Hidden Scheduled Task execution",
+          "Suspicious Scheduled Task"
+      ),
+      TaskType = case(
+          EventID == 4698, "Task Created",
+          EventID == 4702, "Task Modified",
+          "Unknown"
+      )
+  | project
+      TimeGenerated,
+      Computer,
+      TaskType,
+      EventID,
+      TaskName,
+      TaskContent,
+      InitiatingAccount,
+      InitiatingDomain,
+      DetectionReason,
+      SuspicionScore,
+      Activity
+  | order by SuspicionScore desc, TimeGenerated desc
+entityMappings:
+  - entityType: Host
+    fieldMappings:
+      - identifier: FullName
+        columnName: Computer
+  - entityType: Account
+    fieldMappings:
+      - identifier: FullName
+        columnName: InitiatingAccount
+customDetails:
+  TaskName: TaskName
+  TaskType: TaskType
+  TaskContent: TaskContent
+  DetectionReason: DetectionReason
+  SuspicionScore: SuspicionScore
+  InitiatingAccount: InitiatingAccount
+  InitiatingDomain: InitiatingDomain
+eventGroupingSettings:
+  aggregationKind: AlertPerResult
+incidentConfiguration:
+  createIncident: true
+  groupingConfiguration:
+    enabled: true
+    reopenClosedIncident: false
+    lookbackDuration: PT1H
+    matchingMethod: Selected
+    groupByEntities:
+      - Host
+      - Account
+    groupByAlertDetails: []
+    groupByCustomDetails: []
+alertDetailsOverride:
+  alertDisplayNameFormat: "Suspicious scheduled task {{TaskName}} on {{Computer}}"
+  alertDescriptionFormat: "Task {{TaskName}} was created or modified on {{Computer}} by {{InitiatingAccount}} and matched {{DetectionReason}}."
+version: 1.0.0
+kind: Scheduled
