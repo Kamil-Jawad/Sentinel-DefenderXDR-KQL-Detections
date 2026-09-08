@@ -1,0 +1,160 @@
+id: c8f3e1a9-4d27-4f61-9b23-5a0d8c7e1143
+name: Windows VM - Successful RDP After Multiple Failures
+description: |
+  Identifies a successful Remote Desktop Protocol logon following multiple failed RDP authentication attempts against the same account and Azure Windows VM from the same source IP. The rule requires at least five failed RDP logons within a short correlation window before the successful authentication. This behavior may indicate successful password guessing or account compromise. Investigate privileged activity and process execution immediately after the successful RDP logon.
+severity: High
+status: Available
+requiredDataConnectors:
+  - connectorId: SecurityEvents
+    dataTypes:
+      - SecurityEvent
+  - connectorId: WindowsSecurityEvents
+    dataTypes:
+      - SecurityEvent
+  - connectorId: WindowsForwardedEvents
+    dataTypes:
+      - WindowsEvent
+queryFrequency: 5m
+queryPeriod: 20m
+triggerOperator: gt
+triggerThreshold: 0
+tactics:
+  - CredentialAccess
+relevantTechniques:
+  - T1110
+  - T1110.001
+query: |
+  let DetectionWindow = 20m;
+  let MinimumFailures = 5;
+
+  let FailedRDP =
+      SecurityEvent
+      | where TimeGenerated >= ago(DetectionWindow)
+      | where EventID == 4625
+      | where LogonType == 10
+      | where isnotempty(IpAddress)
+      | where isnotempty(TargetUserName)
+      | where IpAddress !in ("-", "::1", "127.0.0.1")
+      | where TargetUserName !in~ (
+          "ANONYMOUS LOGON",
+          "SYSTEM",
+          "LOCAL SERVICE",
+          "NETWORK SERVICE"
+      )
+      | where Status in~ ("0xC000006D")
+          or SubStatus in~ ("0xC0000064", "0xC000006A")
+      | project
+          FailureTime = TimeGenerated,
+          IpAddress,
+          TargetUserName,
+          Computer,
+          FailureStatus = Status,
+          FailureSubStatus = SubStatus,
+          FailureReason = FailureReason;
+
+  let SuccessfulRDP =
+      SecurityEvent
+      | where TimeGenerated >= ago(DetectionWindow)
+      | where EventID == 4624
+      | where LogonType == 10
+      | where isnotempty(IpAddress)
+      | where isnotempty(TargetUserName)
+      | where IpAddress !in ("-", "::1", "127.0.0.1")
+      | where TargetUserName !in~ (
+          "ANONYMOUS LOGON",
+          "SYSTEM",
+          "LOCAL SERVICE",
+          "NETWORK SERVICE"
+      )
+      | project
+          SuccessTime = TimeGenerated,
+          IpAddress,
+          TargetUserName,
+          Computer,
+          AuthenticationPackageName,
+          WorkstationName;
+
+  FailedRDP
+  | join kind=inner SuccessfulRDP
+      on IpAddress, TargetUserName, Computer
+  | where FailureTime < SuccessTime
+  | where FailureTime >= SuccessTime - 15m
+  | summarize
+      FailedAttemptsBeforeSuccess = count(),
+      FirstFailure = min(FailureTime),
+      LastFailure = max(FailureTime),
+      FailureReasons = make_set(FailureReason, 5),
+      FailureStatuses = make_set(FailureStatus, 5),
+      FailureSubStatuses = make_set(FailureSubStatus, 5)
+      by
+          SuccessTime,
+          IpAddress,
+          TargetUserName,
+          Computer,
+          AuthenticationPackageName,
+          WorkstationName
+  | where FailedAttemptsBeforeSuccess >= MinimumFailures
+  | extend
+      AttackType = "Successful RDP After Multiple Failures",
+      FailureToSuccessSeconds = datetime_diff("second", SuccessTime, LastFailure),
+      FailureWindowMinutes = round(todouble(datetime_diff("second", SuccessTime, FirstFailure)) / 60.0, 2)
+  | project
+      TimeGenerated = SuccessTime,
+      Computer,
+      IpAddress,
+      TargetUserName,
+      AttackType,
+      FailedAttemptsBeforeSuccess,
+      FirstFailure,
+      LastFailure,
+      SuccessTime,
+      FailureToSuccessSeconds,
+      FailureWindowMinutes,
+      AuthenticationPackageName,
+      WorkstationName,
+      FailureReasons,
+      FailureStatuses,
+      FailureSubStatuses
+  | order by FailedAttemptsBeforeSuccess desc
+entityMappings:
+  - entityType: Account
+    fieldMappings:
+      - identifier: FullName
+        columnName: TargetUserName
+  - entityType: Host
+    fieldMappings:
+      - identifier: FullName
+        columnName: Computer
+  - entityType: IP
+    fieldMappings:
+      - identifier: Address
+        columnName: IpAddress
+customDetails:
+  SourceIP: IpAddress
+  TargetAccount: TargetUserName
+  TargetHost: Computer
+  FailedAttempts: FailedAttemptsBeforeSuccess
+  FirstFailure: FirstFailure
+  LastFailure: LastFailure
+  FailureToSuccessSeconds: FailureToSuccessSeconds
+  AuthenticationPackage: AuthenticationPackageName
+eventGroupingSettings:
+  aggregationKind: SingleAlert
+incidentConfiguration:
+  createIncident: true
+  groupingConfiguration:
+    enabled: true
+    reopenClosedIncident: false
+    lookbackDuration: PT1H
+    matchingMethod: Selected
+    groupByEntities:
+      - Account
+      - Host
+      - IP
+    groupByAlertDetails: []
+    groupByCustomDetails: []
+alertDetailsOverride:
+  alertDisplayNameFormat: "Successful RDP after {{FailedAttemptsBeforeSuccess}} failed attempts from {{IpAddress}} to {{Computer}}"
+  alertDescriptionFormat: "A successful RDP logon for {{TargetUserName}} from {{IpAddress}} followed {{FailedAttemptsBeforeSuccess}} failed RDP attempts against {{Computer}}."
+version: 1.0.0
+kind: Scheduled
