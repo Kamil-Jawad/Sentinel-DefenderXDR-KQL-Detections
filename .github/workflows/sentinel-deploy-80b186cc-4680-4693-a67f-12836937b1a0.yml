@@ -1,85 +1,85 @@
-name: Deploy Content to sentinel-law [80b186cc-4680-4693-a67f-12836937b1a0]
+name: Deploy YAML Sentinel Rules
 
 on:
   push:
-    branches: [ main ]
-    paths:
-      - 'detections/windows/**'
-      - '!.github/workflows/**'
-      - '.github/workflows/sentinel-deploy-80b186cc-4680-4693-a67f-12836937b1a0.yml'
+    branches:
+      - main
 
 jobs:
-  deploy-content:
-    runs-on: windows-latest
-    env:
-      resourceGroupName: 'cybersecurity-rg'
-      workspaceName: 'sentinel-law'
-      workspaceId: '9a5d6687-b4fe-4855-aa47-796da478c835'
-      directory: '${{ github.workspace }}/detections/windows'
-      cloudEnv: 'AzureCloud'
-      contentTypes: 'AnalyticsRule'
-      branch: 'main'
-      sourceControlId: '80b186cc-4680-4693-a67f-12836937b1a0'
-      rootDirectory: '${{ github.workspace }}'
-      githubAuthToken: ${{ secrets.GITHUB_TOKEN }}
-      smartDeployment: 'false'
-    permissions:
-      contents: write
-      id-token: write # Require write permission to Fetch an OIDC token.
-
+  deploy:
+    runs-on: ubuntu-latest
     steps:
-    - name: Login to Azure (Attempt 1)
-      continue-on-error: true
-      id: login1
-      uses: azure/login@v2
-      with:
-        client-id: ${{ secrets.AZURE_SENTINEL_CLIENTID_80b186cc46804693a67f12836937b1a0 }}
-        tenant-id: ${{ secrets.AZURE_SENTINEL_TENANTID_80b186cc46804693a67f12836937b1a0 }}
-        subscription-id: ${{ secrets.AZURE_SENTINEL_SUBSCRIPTIONID_80b186cc46804693a67f12836937b1a0 }}
-        environment: 'AzureCloud'
-        audience: api://AzureADTokenExchange
-        enable-AzPSSession: true
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-    - name: Wait 30 seconds if login attempt 1 failed
-      if: ${{ steps.login1.outcome=='failure' }}
-      run: powershell Start-Sleep -s 30
+      - name: Convert YAML Rules to ARM Templates
+        shell: pwsh
+        run: |
+          # Create output directory for generated ARM JSONs
+          New-Item -ItemType Directory -Force -Path "./ARM_Templates"
+          
+          # Install powershell-yaml module silently
+          Install-Module -Name powershell-yaml -Scope CurrentUser -Force
+          
+          # Process YAML files
+          $yamlFiles = Get-ChildItem -Path ./Detections/*.yaml, ./Detections/*.yml -ErrorAction SilentlyContinue
+          
+          if ($null -eq $yamlFiles -or $yamlFiles.Count -eq 0) {
+              Write-Host "No YAML detection files found in ./Detections"
+              exit 0
+          }
+          
+          foreach ($file in $yamlFiles) {
+              $yaml = Get-Content $file.FullName -Raw | ConvertFrom-Yaml
+              
+              $armTemplate = @{
+                  '$schema' = "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#"
+                  contentVersion = "1.0.0.0"
+                  resources = @(
+                      @{
+                          type = "Microsoft.OperationalInsights/workspaces/providers/alertRules"
+                          apiVersion = "2022-11-01-preview"
+                          name = "sentinel-law/Microsoft.SecurityInsights/$($yaml.id)"
+                          kind = "Scheduled"
+                          properties = @{
+                              displayName      = $yaml.displayName
+                              description      = $yaml.description
+                              severity         = $yaml.severity
+                              enabled          = [bool]$yaml.enabled
+                              query            = $yaml.query
+                              queryFrequency   = $yaml.queryFrequency
+                              queryPeriod      = $yaml.queryPeriod
+                              triggerOperator  = $yaml.triggerOperator
+                              triggerThreshold = [int]$yaml.triggerThreshold
+                          }
+                      }
+                  )
+              }
+              
+              $jsonPath = "./ARM_Templates/$($file.BaseName).json"
+              $armTemplate | ConvertTo-Json -Depth 10 | Set-Content -Path $jsonPath
+              Write-Host "Successfully converted $($file.Name) -> $jsonPath"
+          }
 
-    - name: Login to Azure (Attempt 2)
-      continue-on-error: true
-      id: login2
-      uses: azure/login@v2
-      if: ${{ steps.login1.outcome=='failure' }}
-      with:
-        client-id: ${{ secrets.AZURE_SENTINEL_CLIENTID_80b186cc46804693a67f12836937b1a0 }}
-        tenant-id: ${{ secrets.AZURE_SENTINEL_TENANTID_80b186cc46804693a67f12836937b1a0 }}
-        subscription-id: ${{ secrets.AZURE_SENTINEL_SUBSCRIPTIONID_80b186cc46804693a67f12836937b1a0 }}
-        environment: 'AzureCloud'
-        audience: api://AzureADTokenExchange
-        enable-AzPSSession: true
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_SENTINEL_CREDENTIALS }}
 
-    - name: Wait 30 seconds if login attempt 2 failed
-      if: ${{ steps.login2.outcome=='failure' }}
-      run: powershell Start-Sleep -s 30
-
-    - name: Login to Azure (Attempt 3)
-      continue-on-error: false
-      id: login3
-      uses: azure/login@v2
-      if: ${{ steps.login2.outcome=='failure' }}
-      with:
-        client-id: ${{ secrets.AZURE_SENTINEL_CLIENTID_80b186cc46804693a67f12836937b1a0 }}
-        tenant-id: ${{ secrets.AZURE_SENTINEL_TENANTID_80b186cc46804693a67f12836937b1a0 }}
-        subscription-id: ${{ secrets.AZURE_SENTINEL_SUBSCRIPTIONID_80b186cc46804693a67f12836937b1a0 }}
-        environment: 'AzureCloud'
-        audience: api://AzureADTokenExchange
-        enable-AzPSSession: true
-
-    - name: Checkout
-      uses: actions/checkout@v3
-
-    - name: Deploy Content to Microsoft Sentinel
-      uses: azure/powershell@v2
-      with:
-        azPSVersion: 'latest'
-        inlineScript: |
-          ${{ github.workspace }}//.github/workflows/azure-sentinel-deploy-80b186cc-4680-4693-a67f-12836937b1a0.ps1
+      - name: Deploy ARM Templates via Azure CLI
+        uses: azure/CLI@v2
+        with:
+          inlineScript: |
+            shopt -s nullglob
+            files=(./ARM_Templates/*.json)
+            if [ ${#files[@]} -eq 0 ]; then
+              echo "No ARM templates to deploy."
+              exit 0
+            fi
+            
+            for file in "${files[@]}"; do
+              echo "Deploying $file..."
+              az deployment group create \
+                --resource-group cybersecurity-rg \
+                --template-file "$file"
+            done
