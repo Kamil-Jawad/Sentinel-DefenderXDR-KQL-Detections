@@ -1,21 +1,13 @@
 name: Deploy Content to sentinel-law [80b186cc-4680-4693-a67f-12836937b1a0]
-# Note: This workflow will deploy everything in the root directory.
-# To deploy content only from a specific path (for example SentinelContent):
-#   1. Add the target path to the "paths" property like such
-#    paths:
-#    - 'SentinelContent/**'
-#    - '!.github/workflows/**'
-#    - '.github/workflows/sentinel-deploy-80b186cc-4680-4693-a67f-12836937b1a0.yml'
-#   2. Append the path to the directory environment variable below
-#       directory: '${{ github.workspace }}/SentinelContent'
+# Note: Configured to deploy detection rules from detections/windows folder.
 
 on:
   push:
     branches: [ main ]
     paths:
-    - '**'
-    - '!.github/workflows/**'  # this filter prevents other workflow changes from triggering this workflow
-    - '.github/workflows/sentinel-deploy-80b186cc-4680-4693-a67f-12836937b1a0.yml'
+      - 'detections/windows/**'
+      - '!.github/workflows/**'
+      - '.github/workflows/sentinel-deploy-80b186cc-4680-4693-a67f-12836937b1a0.yml'
 
 jobs:
   deploy-content:
@@ -24,12 +16,12 @@ jobs:
       resourceGroupName: 'cybersecurity-rg'
       workspaceName: 'sentinel-law'
       workspaceId: '9a5d6687-b4fe-4855-aa47-796da478c835'
-      directory: '${{ github.workspace }}'
+      directory: '${{ github.workspace }}/detections/windows'
       cloudEnv: 'AzureCloud'
       contentTypes: 'AnalyticsRule'
       branch: 'main'
       sourceControlId: '80b186cc-4680-4693-a67f-12836937b1a0'
-      rootDirectory: '${{ github.workspace }}'
+      rootDirectory: '${{ github.workspace }}/detections/windows'
       githubAuthToken: ${{ secrets.GITHUB_TOKEN }}
       smartDeployment: 'true'
     permissions:
@@ -74,7 +66,7 @@ jobs:
       continue-on-error: false
       id: login3
       uses: azure/login@v2
-      if: ${{ steps.login2.outcome=='failure'  }}
+      if: ${{ steps.login2.outcome=='failure' }}
       with:
         client-id: ${{ secrets.AZURE_SENTINEL_CLIENTID_80b186cc46804693a67f12836937b1a0 }}
         tenant-id: ${{ secrets.AZURE_SENTINEL_TENANTID_80b186cc46804693a67f12836937b1a0 }}
