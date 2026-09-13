@@ -1,5 +1,4 @@
 name: Deploy Content to sentinel-law [80b186cc-4680-4693-a67f-12836937b1a0]
-# Note: Configured to deploy detection rules from detections/windows folder.
 
 on:
   push:
@@ -21,7 +20,7 @@ jobs:
       contentTypes: 'AnalyticsRule'
       branch: 'main'
       sourceControlId: '80b186cc-4680-4693-a67f-12836937b1a0'
-      rootDirectory: '${{ github.workspace }}/detections/windows'
+      rootDirectory: '${{ github.workspace }}'
       githubAuthToken: ${{ secrets.GITHUB_TOKEN }}
       smartDeployment: 'true'
     permissions:
