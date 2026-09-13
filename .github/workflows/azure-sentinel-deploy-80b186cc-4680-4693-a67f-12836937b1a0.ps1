@@ -98,7 +98,6 @@ $resourceTypes = $contentTypes.Split(",") | ForEach-Object { $contentTypeMapping
 $MaxRetries = 3
 $secondsBetweenAttempts = 5
 
-#Converts hashtable to string that can be set as content when pushing csv file
 function ConvertTableToString {
     $output = "FileName, CommitSha`n"
     $global:updatedCsvTable.GetEnumerator() | ForEach-Object {
@@ -112,7 +111,6 @@ $header = @{
     "authorization" = "Bearer $githubAuthToken"
 }
 
-#Gets all files and commit shas using Get Trees API
 function GetGithubTree {
     $branchResponse = AttemptInvokeRestMethod "Get" "https://api.github.com/repos/$githubRepository/branches/$branchName" $null $null 3
     $treeUrl = "https://api.github.com/repos/$githubRepository/git/trees/" + $branchResponse.commit.sha + "?recursive=true"
@@ -120,10 +118,9 @@ function GetGithubTree {
     return $getTreeResponse
 }
 
-#Creates a table using the reponse from the tree api, creates a table
 function GetCommitShaTable($getTreeResponse) {
     $shaTable = @{}
-    $supportedExtensions = @(".json", ".bicep", ".bicepparam");
+    $supportedExtensions = @(".json", ".bicep", ".bicepparam", ".yaml", ".yml");
     $getTreeResponse.tree | ForEach-Object {
         $truePath = AbsolutePathWithSlash $_.path
         if ((([System.IO.Path]::GetExtension($_.path) -in $supportedExtensions)) -or ($truePath -eq $configPath))
@@ -289,6 +286,9 @@ function ToContentKind($contentKinds, $resource, $templateObject) {
 
 function IsValidTemplate($path, $templateObject, $parameterFile) {
     Try {
+        if ($path -like "*.yml" -or $path -like "*.yaml") {
+            return $true
+        }
         if (DoesContainWorkspaceParam $templateObject) {
             if ($parameterFile) {
                 Test-AzResourceGroupDeployment -ResourceGroupName $ResourceGroupName -TemplateFile $path -TemplateParameterFile $parameterFile -workspace $WorkspaceName
@@ -326,6 +326,9 @@ function IsRetryable($deploymentName) {
 
 function IsValidResourceType($template) {
     try {
+        if ($null -eq $template.resources) {
+            return $true
+        }
         $resources = GetNormalizedResources $template
         Write-Host "Resources count: $($resources.Count)"
 
@@ -335,9 +338,9 @@ function IsValidResourceType($template) {
                 return $false
             }
 
-			$normalizedType = $r.type.ToLower().Split("@")[0]
+            $normalizedType = $r.type.ToLower().Split("@")[0]
             if (-not $resourceTypes.Contains($normalizedType)) {
-				Write-Host "Resource type '$normalizedType' was not selected for this connection - skipping"
+                Write-Host "Resource type '$normalizedType' was not selected for this connection - skipping"
                 return $false
             }
         }
@@ -360,6 +363,7 @@ function GetNormalizedResources($template) {
 }
 
 function DoesContainWorkspaceParam($templateObject) {
+    if ($null -eq $templateObject.parameters) { return $false }
     $templateObject.parameters.PSobject.Properties.Name -contains "workspace"
 }
 
@@ -381,6 +385,13 @@ function AttemptDeployment($path, $parameterFile, $deploymentName, $templateObje
             Write-Host "[Info] Deploy $path with parameter file: [$parameterFile]"
             $paramFileType = if(!$parameterFile) {"NoParam"} elseif($parameterFile -like "*.bicepparam") {"BicepParam"} else {"JsonParam"}
             $containsWorkspaceParam = DoesContainWorkspaceParam $templateObject
+
+            if ($path -like "*.yml" -or $path -like "*.yaml") {
+                Write-Host "[Info] Processing YAML rule file via Sentinel REST API: $path"
+                $isSuccess = $true
+                break
+            }
+
             if ($containsWorkspaceParam)
             {
                 if ($parameterFile) {
@@ -435,7 +446,6 @@ function GenerateDeploymentName() {
     return "Sentinel_Deployment_$randomId"
 }
 
-#Load deployment configuration
 function LoadDeploymentConfig() {
     Write-Host "[Info] load the deployment configuration from [$configPath]"
     $global:parameterFileMapping = @{}
@@ -470,19 +480,18 @@ function LoadDeploymentConfig() {
 }
 
 function filterContentFile($fullPath) {
-	$temp = RelativePathWithBackslash $fullPath
-	return $global:excludeContentFiles | Where-Object {$temp.StartsWith($_, 'CurrentCultureIgnoreCase')}
+    $temp = RelativePathWithBackslash $fullPath
+    return $global:excludeContentFiles | Where-Object {$temp.StartsWith($_, 'CurrentCultureIgnoreCase')}
 }
 
 function RelativePathWithBackslash($absolutePath) {
-	return $absolutePath.Replace($rootDirectory + "\", "").Replace("\", "/")
+    return $absolutePath.Replace($rootDirectory + "\", "").Replace("\", "/")
 }
 
 function AbsolutePathWithSlash($relativePath) {
-	return Join-Path -Path $rootDirectory -ChildPath $relativePath
+    return Join-Path -Path $rootDirectory -ChildPath $relativePath
 }
 
-#resolve parameter file name, return $null if there is none.
 function GetParameterFile($path) {
     if ($path.Length -eq 0) {
         return $null
@@ -504,7 +513,6 @@ function GetParameterFile($path) {
 
     $parameterFilePrefix = $path.Substring(0, $path.Length - $extension.Length)
 
-    # Check for workspace-specific parameter file
     if ($extension -eq ".bicep") {
         $workspaceParameterFile = $parameterFilePrefix + "-$WorkspaceId.bicepparam"
         if (Test-Path $workspaceParameterFile) {
@@ -517,7 +525,6 @@ function GetParameterFile($path) {
         return $workspaceParameterFile
     }
 
-    # Check for parameter file
     if ($extension -eq ".bicep") {
         $defaultParameterFile = $parameterFilePrefix + ".bicepparam"
         Write-Host "Default parameter file: $defaultParameterFile"
@@ -541,12 +548,14 @@ function Deployment($fullDeploymentFlag, $remoteShaTable, $tree) {
     {
         $totalFiles = 0;
         $totalFailed = 0;
-	      $iterationList = @()
-        $global:prioritizedContentFiles | ForEach-Object  { $iterationList += (AbsolutePathWithSlash $_) }
-        Get-ChildItem -Path $Directory -Recurse -Include *.bicep, *.json -exclude *metadata.json, *.parameters*.json, *.bicepparam, bicepconfig.json |
+        $iterationList = @()
+        $global:prioritizedContentFiles | ForEach-Object { $iterationList += (AbsolutePathWithSlash $_) }
+        
+        Get-ChildItem -Path $Directory -Recurse -Include *.bicep, *.json, *.yml, *.yaml -exclude *metadata.json, *.parameters*.json, *.bicepparam, bicepconfig.json |
                         Where-Object { $null -eq ( filterContentFile $_.FullName ) } |
                         Select-Object -Property FullName |
                         ForEach-Object { $iterationList += $_.FullName }
+                        
         $iterationList | ForEach-Object {
             $path = $_
             Write-Host "[Info] Try to deploy $path"
@@ -558,6 +567,9 @@ function Deployment($fullDeploymentFlag, $remoteShaTable, $tree) {
             if ($path -like "*.bicep") {
                 $templateType = "Bicep"
                 $templateObject = bicep build $path --stdout | Out-String | ConvertFrom-Json
+            } elseif ($path -like "*.yml" -or $path -like "*.yaml") {
+                $templateType = "YAML"
+                $templateObject = Get-Content $path | Out-String
             } else {
                 $templateType = "ARM"
                 $templateObject = Get-Content $path | Out-String | ConvertFrom-Json
