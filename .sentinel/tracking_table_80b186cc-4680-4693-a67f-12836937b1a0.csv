@@ -1,2 +1,10 @@
 FileName, CommitSha
+detections/windows/WIN-009-security-control-tampering.yml,7d81c46e6d89ac325fe4e37d3b2068baf9e88a18
+detections/windows/WIN-007-suspicious-scheduled-task.yml,2932bfd7118408f3034caac9cf613a95e0b9599d
+detections/windows/WIN-005-suspicious-powershell.yml,d59af3c868b863b419da3bd69537013626680943
+detections/windows/WIN-010-lateral-movement-remote-execution.yml,f31bc19359166fa1864af67290ccbe9d1ba7aadf
+detections/windows/WIN-008-unexpected-lolbin-execution.yml,f43292ac888efec99349c6ed7c6a946dfda0c663
+detections/windows/WIN-003-successful-rdp-after-failures.yml,21710e2cb88b71baf5dd44da783e66a4720861f5
+detections/windows/WIN-006-suspicious-service-creation.yml,0b2316af03eb776baf9ecc05a9d2839716109530
+detections/windows/WIN-004-privileged-account-added-to-admin-group.yml,632fb6ec7afc4eb190cf687fcf9759b6699b083e
 
