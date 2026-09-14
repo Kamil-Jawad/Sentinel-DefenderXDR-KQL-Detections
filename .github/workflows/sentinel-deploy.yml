@@ -66,6 +66,8 @@ jobs:
                         queryPeriod = (Convert-ToIso8601 $yamlContent.queryPeriod)
                         triggerOperator = $yamlContent.triggerOperator
                         triggerThreshold = [int]$yamlContent.triggerThreshold
+                        suppressionEnabled = $false
+                        suppressionDuration = "PT5H"
                         tactics = $yamlContent.tactics
                         techniques = $yamlContent.relevantTechniques
                         entityMappings = $yamlContent.entityMappings
