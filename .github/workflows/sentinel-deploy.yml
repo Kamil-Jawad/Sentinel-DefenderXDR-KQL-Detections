@@ -39,6 +39,13 @@ jobs:
                 'Authorization' = "Bearer $($token.AccessToken)"
             }
 
+            function Convert-ToIso8601 ($duration) {
+                if ($duration -match '^(\d+)h$') { return "PT$($Matches[1])H" }
+                if ($duration -match '^(\d+)m$') { return "PT$($Matches[1])M" }
+                if ($duration -match '^(\d+)d$') { return "P$($Matches[1])D" }
+                return $duration
+            }
+
             $files = Get-ChildItem -Path "./Detections/*.yaml"
             foreach ($file in $files) {
                 Write-Host "Deploying detection rule: $($file.Name)"
@@ -55,8 +62,8 @@ jobs:
                         severity = $yamlContent.severity
                         enabled = $true
                         query = $yamlContent.query
-                        queryFrequency = $yamlContent.queryFrequency
-                        queryPeriod = $yamlContent.queryPeriod
+                        queryFrequency = (Convert-ToIso8601 $yamlContent.queryFrequency)
+                        queryPeriod = (Convert-ToIso8601 $yamlContent.queryPeriod)
                         triggerOperator = $yamlContent.triggerOperator
                         triggerThreshold = [int]$yamlContent.triggerThreshold
                         tactics = $yamlContent.tactics
