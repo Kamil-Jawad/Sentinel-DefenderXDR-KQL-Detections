@@ -1,6 +1,6 @@
 id: 11111111-2222-3333-4444-555555555505
 name: Command Line Network Discovery Commands
-description: Detects process execution of basic Windows network reconnaissance commands.
+description: Detects process execution of basic Windows network reconnaissance commands. 
 severity: Low
 status: Available
 requiredDataConnectors:
