@@ -22,4 +22,4 @@ jobs:
         subscriptionId: 'ad53e885-f3f0-46f4-a830-a583b0273392'
         resourceGroupName: 'cybersecurity-rg'
         workspaceName: 'sentinel-law'
-        smartDeployment: 'false'
+        smartDeployment: 'true'
