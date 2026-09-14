@@ -1,0 +1,30 @@
+id: 11111111-2222-3333-4444-555555555504
+name: Windows Security Log Cleared
+description: Detects when the Security event log is cleared by a user or script.
+severity: High
+status: Available
+requiredDataConnectors:
+  - connectorId: SecurityEvents
+    dataTypes:
+      - SecurityEvent
+queryFrequency: 1h
+queryPeriod: 1h
+triggerOperator: GreaterThan
+triggerThreshold: 0
+tactics:
+  - DefenseEvasion
+relevantTechniques:
+  - T1070.001
+query: |
+  SecurityEvent
+  | where EventID == 1102 or EventID == 517
+  | project TimeGenerated, Account, Computer, EventID, Activity
+entityMappings:
+  - entityType: Account
+    fieldMappings:
+      - identifier: FullName
+        columnName: Account
+  - entityType: Host
+    fieldMappings:
+      - identifier: FullName
+        columnName: Computer
