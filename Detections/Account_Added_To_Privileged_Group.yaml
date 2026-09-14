@@ -1,0 +1,32 @@
+id: 11111111-2222-3333-4444-555555555501
+name: Member Added to Privileged Domain Group
+description: Detects when an account is added to Domain Admins or Enterprise Admins.
+severity: High
+status: Available
+requiredDataConnectors:
+  - connectorId: SecurityEvents
+    dataTypes:
+      - SecurityEvent
+queryFrequency: 1h
+queryPeriod: 1h
+triggerOperator: GreaterThan
+triggerThreshold: 0
+tactics:
+  - Persistence
+  - PrivilegeEscalation
+relevantTechniques:
+  - T1098
+query: |
+  SecurityEvent
+  | where EventID == 4728 or EventID == 4732 or EventID == 4756
+  | where TargetUserName in~ ("Domain Admins", "Enterprise Admins", "Administrators")
+  | project TimeGenerated, TargetUserName, MemberName, SubjectUserName, Computer
+entityMappings:
+  - entityType: Account
+    fieldMappings:
+      - identifier: FullName
+        columnName: MemberName
+  - entityType: Host
+    fieldMappings:
+      - identifier: FullName
+        columnName: Computer
