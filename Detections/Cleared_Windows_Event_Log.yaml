@@ -1,5 +1,5 @@
 id: 11111111-2222-3333-4444-555555555504
-name: Windows Security Log Cleared 
+name: Windows Security Log Cleared
 description: Detects when the Security event log is cleared by a user or script.
 severity: High
 status: Available
