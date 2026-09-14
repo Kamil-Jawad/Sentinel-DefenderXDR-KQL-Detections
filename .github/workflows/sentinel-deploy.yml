@@ -17,20 +17,58 @@ jobs:
       - name: Azure Login
         uses: azure/login@v2
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          creds: '{"clientId":"${{ secrets.AZURE_CLIENT_ID }}","clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}","subscriptionId":"${{ secrets.AZURE_SUBSCRIPTION_ID }}","tenantId":"${{ secrets.AZURE_TENANT_ID }}"}'
+          enable-AzPSSession: true
 
       - name: Deploy YAML Rules to Sentinel
         uses: Azure/powershell@v2
         with:
           inlineScript: |
-            $resourceGroup = "${{ secrets.AZURE_RESOURCE_GROUP }}"
-            $workspaceName = "${{ secrets.AZURE_SENTINEL_WORKSPACE }}"
+            Install-Module -Name powershell-yaml -Force -Scope CurrentUser
             
+            $subscriptionId = "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            $resourceGroup = "rg-sentinel" # Replace with your Resource Group name
+            $workspaceName = "workspace-sentinel" # Replace with your Workspace name
+            
+            $azContext = Get-AzContext
+            $azProfile = [Microsoft.Azure.Commands.Common.Authentication.Abstractions.AzureRmProfileProvider]::Instance.Profile
+            $profileClient = New-Object -TypeName Microsoft.Azure.Commands.ResourceManager.Common.RMProfileClient -ArgumentList ($azProfile)
+            $token = $profileClient.AcquireAccessToken($azContext.Subscription.TenantId)
+            $authHeader = @{
+                'Content-Type'  = 'application/json'
+                'Authorization' = "Bearer $($token.AccessToken)"
+            }
+
             $files = Get-ChildItem -Path "./Detections/*.yaml"
             foreach ($file in $files) {
-                Write-Host "Deploying rule: $($file.Name)"
-                # Parses YAML and sends directly to Microsoft Sentinel REST API
-                $rawYaml = Get-Content $file.FullName -Raw
-                # Invoke deployment execution logic
+                Write-Host "Processing detection rule: $($file.Name)"
+                $yamlContent = Get-Content $file.FullName -Raw | ConvertFrom-Yaml
+                
+                $ruleId = $yamlContent.id
+                $uri = "https://management.azure.com/subscriptions/$subscriptionId/resourceGroups/$resourceGroup/providers/Microsoft.OperationalInsights/workspaces/$workspaceName/providers/Microsoft.SecurityInsights/alertRules/$($ruleId)?api-version=2023-02-01-preview"
+                
+                $body = @{
+                    kind = "Scheduled"
+                    properties = @{
+                        displayName = $yamlContent.name
+                        description = $yamlContent.description
+                        severity = $yamlContent.severity
+                        enabled = $true
+                        query = $yamlContent.query
+                        queryFrequency = $yamlContent.queryFrequency
+                        queryPeriod = $yamlContent.queryPeriod
+                        triggerOperator = $yamlContent.triggerOperator
+                        triggerThreshold = [int]$yamlContent.triggerThreshold
+                        tactics = $yamlContent.tactics
+                        techniques = $yamlContent.relevantTechniques
+                        entityMappings = $yamlContent.entityMappings
+                    }
+                } | ConvertTo-Json -Depth 10
+
+                Invoke-RestMethod -Uri $uri -Method Put -Headers $authHeader -Body $body
+                Write-Host "Successfully deployed $($yamlContent.name)"
             }
           azPSVersion: "latest"
