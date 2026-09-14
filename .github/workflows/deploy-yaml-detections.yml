@@ -1,0 +1,45 @@
+name: Deploy YAML Detections to Sentinel
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'detections/**/*.yml'
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          enable-AzPSSession: true
+
+      - name: Install required modules
+        shell: pwsh
+        run: |
+          Install-Module -Name powershell-yaml -Scope CurrentUser -Force -AllowClobber
+          Install-Module -Name AzSentinel -Scope CurrentUser -Force -AllowClobber
+
+      - name: Import each detection rule
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -Path detections -Recurse -Include *.yml,*.yaml
+          foreach ($f in $files) {
+            Write-Host "Deploying $($f.FullName)"
+            Import-AzSentinelAlertRule `
+              -SubscriptionId "${{ secrets.AZURE_SUBSCRIPTION_ID }}" `
+              -WorkspaceName "sentinel-law" `
+              -SettingsFile $f.FullName `
+              -Confirm:$false
+          }
