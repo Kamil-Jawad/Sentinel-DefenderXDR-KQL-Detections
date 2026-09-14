@@ -115,7 +115,6 @@ incidentConfiguration:
     matchingMethod: Selected
     groupByEntities:
       - Host
-      - SecurityGroup
       - Account
     groupByAlertDetails: []
     groupByCustomDetails: []
