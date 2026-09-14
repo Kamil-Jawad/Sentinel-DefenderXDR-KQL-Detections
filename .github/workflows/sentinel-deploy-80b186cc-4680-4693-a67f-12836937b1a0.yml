@@ -6,6 +6,8 @@ on:
     paths:
       - 'detections/**/*.yml'
       - 'detections/**/*.yaml'
+      - '.github/workflows/*.yml'
+  workflow_dispatch:
 
 jobs:
   deploy-content:
