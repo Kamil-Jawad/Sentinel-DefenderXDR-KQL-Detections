@@ -3,7 +3,7 @@ name: High Volume Failed Logons (Possible Brute Force)
 description: Detects a single account with over 10 failed logon attempts within one hour.
 severity: Medium
 status: Available
-requiredDataConnectors:
+requiredDataConnectors: 
   - connectorId: SecurityEvents
     dataTypes:
       - SecurityEvent
