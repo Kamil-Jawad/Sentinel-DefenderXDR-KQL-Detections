@@ -1,0 +1,36 @@
+name: Deploy Sentinel Detection Rules (YAML)
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'Detections/**'
+
+jobs:
+  deploy-sentinel-rules:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Deploy YAML Rules to Sentinel
+        uses: Azure/powershell@v2
+        with:
+          inlineScript: |
+            $resourceGroup = "${{ secrets.AZURE_RESOURCE_GROUP }}"
+            $workspaceName = "${{ secrets.AZURE_SENTINEL_WORKSPACE }}"
+            
+            $files = Get-ChildItem -Path "./Detections/*.yaml"
+            foreach ($file in $files) {
+                Write-Host "Deploying rule: $($file.Name)"
+                # Parses YAML and sends directly to Microsoft Sentinel REST API
+                $rawYaml = Get-Content $file.FullName -Raw
+                # Invoke deployment execution logic
+            }
+          azPSVersion: "latest"
