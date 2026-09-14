@@ -51,6 +51,12 @@ jobs:
                 Write-Host "Deploying detection rule: $($file.Name)"
                 $yamlContent = Get-Content $file.FullName -Raw | ConvertFrom-Yaml
                 
+                # Strip sub-techniques (.xxx) to satisfy REST API validation (T1070.001 -> T1070)
+                $sanitizedTechniques = @()
+                if ($yamlContent.relevantTechniques) {
+                    $sanitizedTechniques = $yamlContent.relevantTechniques | ForEach-Object { $_ -replace '\.\d+$', '' } | Select-Object -Unique
+                }
+
                 $ruleId = $yamlContent.id
                 $uri = "https://management.azure.com/subscriptions/$subscriptionId/resourceGroups/$resourceGroup/providers/Microsoft.OperationalInsights/workspaces/$workspaceName/providers/Microsoft.SecurityInsights/alertRules/$($ruleId)?api-version=2023-02-01-preview"
                 
@@ -69,7 +75,7 @@ jobs:
                         suppressionEnabled = $false
                         suppressionDuration = "PT5H"
                         tactics = $yamlContent.tactics
-                        techniques = $yamlContent.relevantTechniques
+                        techniques = $sanitizedTechniques
                         entityMappings = $yamlContent.entityMappings
                     }
                 } | ConvertTo-Json -Depth 10
