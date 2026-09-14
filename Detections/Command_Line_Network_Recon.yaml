@@ -1,0 +1,33 @@
+id: 11111111-2222-3333-4444-555555555505
+name: Command Line Network Discovery Commands
+description: Detects process execution of basic Windows network reconnaissance commands.
+severity: Low
+status: Available
+requiredDataConnectors:
+  - connectorId: SecurityEvents
+    dataTypes:
+      - SecurityEvent
+queryFrequency: 1h
+queryPeriod: 1h
+triggerOperator: GreaterThan
+triggerThreshold: 0
+tactics:
+  - Discovery
+relevantTechniques:
+  - T1016
+  - T1049
+query: |
+  SecurityEvent
+  | where EventID == 4688
+  | where ProcessName endswith "nltest.exe" or ProcessName endswith "whoami.exe" or ProcessName endswith "net.exe"
+  | where CommandLine has_any ("/domain", "/all", "group", "localgroup")
+  | project TimeGenerated, Account, Computer, NewProcessName, CommandLine
+entityMappings:
+  - entityType: Account
+    fieldMappings:
+      - identifier: FullName
+        columnName: Account
+  - entityType: Host
+    fieldMappings:
+      - identifier: FullName
+        columnName: Computer
