@@ -1,6 +1,6 @@
 id: 11111111-2222-3333-4444-555555555510
 name: High Volume Outbound Network Denials
-description: Identifies a host making over 50 blocked outbound connection attempts within one hour.
+description: Identifies a host making over 50 blocked outbound connection attempts within one hour. 
 severity: Low
 status: Available
 requiredDataConnectors:
