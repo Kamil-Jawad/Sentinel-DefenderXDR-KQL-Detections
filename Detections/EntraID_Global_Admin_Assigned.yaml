@@ -1,0 +1,30 @@
+id: 11111111-2222-3333-4444-555555555508
+name: Entra ID Global Administrator Role Assigned
+description: Detects assignment of the Global Administrator role to an account in Microsoft Entra ID.
+severity: High
+status: Available
+requiredDataConnectors:
+  - connectorId: AzureActiveDirectory
+    dataTypes:
+      - AuditLogs
+queryFrequency: 1h
+queryPeriod: 1h
+triggerOperator: GreaterThan
+triggerThreshold: 0
+tactics:
+  - Persistence
+  - PrivilegeEscalation
+relevantTechniques:
+  - T1098
+query: |
+  AuditLogs
+  | where OperationName == "Add member to role"
+  | where TargetResources[0].displayName == "Global Administrator"
+  | extend InitiatedByAccount = tostring(InitiatedBy.user.userPrincipalName)
+  | extend TargetAccount = tostring(TargetResources[0].userPrincipalName)
+  | project TimeGenerated, InitiatedByAccount, TargetAccount, OperationName
+entityMappings:
+  - entityType: Account
+    fieldMappings:
+      - identifier: FullName
+        columnName: TargetAccount
