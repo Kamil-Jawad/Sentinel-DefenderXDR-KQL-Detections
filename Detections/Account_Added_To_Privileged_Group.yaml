@@ -14,7 +14,7 @@ triggerThreshold: 0
 tactics:
   - Persistence
   - PrivilegeEscalation
-Techniques:
+relevantTechniques:
   - T1098
 query: |
   SecurityEvent
