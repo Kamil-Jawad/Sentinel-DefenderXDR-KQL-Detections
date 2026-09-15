@@ -1,0 +1,26 @@
+id: 11111111-2222-3333-4444-555555555509
+name: Microsoft Defender Real-time Protection Disabled
+description: Detects when Microsoft Defender Antivirus real-time scanning is turned off.
+severity: Medium
+status: Available
+requiredDataConnectors:
+  - connectorId: SecurityEvents
+    dataTypes:
+      - SecurityEvent
+queryFrequency: 1h
+queryPeriod: 1h
+triggerOperator: GreaterThan
+triggerThreshold: 0
+tactics:
+  - DefenseEvasion
+relevantTechniques:
+  - T1562.001
+query: |
+  SecurityEvent
+  | where EventID == 5001
+  | project TimeGenerated, Computer, Activity
+entityMappings:
+  - entityType: Host
+    fieldMappings:
+      - identifier: FullName
+        columnName: Computer
