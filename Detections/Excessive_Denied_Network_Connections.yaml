@@ -1,0 +1,28 @@
+id: 11111111-2222-3333-4444-555555555510
+name: High Volume Outbound Network Denials
+description: Identifies a host making over 50 blocked outbound connection attempts within one hour.
+severity: Low
+status: Available
+requiredDataConnectors:
+  - connectorId: AzureFirewall
+    dataTypes:
+      - AzureDiagnostics
+queryFrequency: 1h
+queryPeriod: 1h
+triggerOperator: GreaterThan
+triggerThreshold: 0
+tactics:
+  - CommandAndControl
+relevantTechniques:
+  - T1071
+query: |
+  AzureDiagnostics
+  | where Category == "AzureFirewallNetworkRule"
+  | where msg_s has "Deny"
+  | summarize DeniedCount = count() by SourceIP = msg_s, bin(TimeGenerated, 1h)
+  | where DeniedCount > 50
+entityMappings:
+  - entityType: IP
+    fieldMappings:
+      - identifier: Address
+        columnName: SourceIP
