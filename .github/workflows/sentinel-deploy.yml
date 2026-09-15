@@ -54,7 +54,7 @@ jobs:
                 # Strip sub-techniques (.xxx) to satisfy REST API validation (T1070.001 -> T1070)
                 $sanitizedTechniques = @()
                 if ($yamlContent.relevantTechniques) {
-                    $sanitizedTechniques = $yamlContent.relevantTechniques | ForEach-Object { $_ -replace '\.\d+$', '' } | Select-Object -Unique
+                    $sanitizedTechniques = @($yamlContent.relevantTechniques | ForEach-Object { $_ -replace '\.\d+$', '' } | Select-Object -Unique)
                 }
 
                 $ruleId = $yamlContent.id
@@ -74,9 +74,9 @@ jobs:
                         triggerThreshold = [int]$yamlContent.triggerThreshold
                         suppressionEnabled = $false
                         suppressionDuration = "PT5H"
-                        tactics = $yamlContent.tactics
+                        tactics = @($yamlContent.tactics)
                         techniques = $sanitizedTechniques
-                        entityMappings = $yamlContent.entityMappings
+                        entityMappings = @($yamlContent.entityMappings)
                     }
                 } | ConvertTo-Json -Depth 10
 
