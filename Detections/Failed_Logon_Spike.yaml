@@ -1,6 +1,6 @@
 id: 11111111-2222-3333-4444-555555555502
 name: High Volume Failed Logons (Possible Brute Force)
-description: Detects a single account with over 10 failed logon attempts within one hour.
+description: Detects a single account with over 10 failed logon attempts within one hour. 
 severity: Medium
 status: Available
 requiredDataConnectors:
